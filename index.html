@@ -33,12 +33,59 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/semantic-ui/2.5.0/semantic.min.js" integrity="sha512-Xo0Jh8MsOn72LGV8kU5LsclG7SUzJsWGhXbWcYs2MAmChkQzwiW/yTQwdJ8w6UA9C6EVG18GHb/TrYpYCjyAQw==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 
     <script type="module" src="js/electron.js"></script>
-    <script type="module" src="js/ide.js"></script>
     <script type="module" src="js/local_storage.js"></script>
     <script type="module" src="js/puter.js"></script>
     <script type="module" src="js/query.js"></script>
     <script type="module" src="js/style.js"></script>
     <script type="module" src="js/theme.js"></script>
+    <!-- Load Groq SDK as module -->
+    <script type="module">
+        let groqClient;
+        let groqInitialized = false;
+      
+        async function initGroq() {
+          try {
+            const { default: Groq } = await import("https://esm.sh/groq-sdk");
+            groqClient = new Groq({
+              apiKey: "insert api key",
+              dangerouslyAllowBrowser: true
+            });
+            window.groqClient = groqClient;
+            groqInitialized = true;
+            console.log('Groq initialized successfully');
+          } catch (error) {
+            console.error('Groq initialization failed:', error);
+          }
+        }
+      
+        // Initialize immediately and retry if needed
+        initGroq();
+      </script>
+        <script type="module">
+            let dmp;
+            let dmpInitialized = false;
+        
+            async function initDiffMatchPatch() {
+            try {
+                // Import the diff-match-patch module from esm.sh.
+                const { default: DiffMatchPatch } = await import("https://esm.sh/diff-match-patch");
+                // Create an instance of diff-match-patch.
+                dmp = new DiffMatchPatch();
+                // Optionally, expose it on the window so you can access it globally.
+                window.dmp = dmp;
+                dmpInitialized = true;
+                console.log("diff-match-patch initialized successfully");
+            } catch (error) {
+                console.error("diff-match-patch initialization failed:", error);
+            }
+            }
+        
+            // Initialize immediately.
+            initDiffMatchPatch();
+        </script>
+  
+    <!-- Load your IDE script as module -->
+    <script type="module" src="js/ide.js"></script>
 
     <link type="text/css" rel="stylesheet" href="css/ide.css">
     <link type="text/css" rel="stylesheet" href="css/semantic.css">

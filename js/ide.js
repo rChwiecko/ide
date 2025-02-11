@@ -1,6 +1,6 @@
 import { usePuter } from "./puter.js";
-import Groq from "groq-sdk";
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+const diff_match = window.dmp;
+
 const API_KEY = ""; // Get yours at https://platform.sulu.sh/apis/judge0
 
 const AUTH_HEADERS = API_KEY
@@ -48,6 +48,9 @@ var timeStart;
 
 var sqliteAdditionalFiles;
 var languages = {};
+
+// Initialize messages as an empty array; we'll add our system prompt later
+let messages = [];
 
 var layoutConfig = {
   settings: {
@@ -113,6 +116,50 @@ function decode(bytes) {
     return decodeURIComponent(escaped);
   } catch {
     return unescape(escaped);
+  }
+}
+
+function getGroqClient() {
+  if (!window.groqClient) {
+    throw new Error("Groq client not initialized");
+  }
+  return window.groqClient;
+}
+
+// Updated getGroqChatCompletion function:
+async function getGroqChatCompletion(query) {
+  try {
+    const groq = getGroqClient();
+    // Here we assume that the system prompt is already in messages.
+    // We simply push the user query.
+    messages.push({
+      role: "user",
+      content: query,
+    });
+
+    const chatCompletion = await groq.chat.completions.create({
+      messages: messages,
+      model: "llama-3.3-70b-versatile",
+      temperature: 0.7,
+      max_tokens: 4000,
+    });
+
+    if (chatCompletion.choices[0]?.message?.content) {
+      messages.push({
+        role: "assistant",
+        content: chatCompletion.choices[0].message.content,
+      });
+    }
+
+    // Keep only last 10 messages to manage context window.
+    if (messages.length > 10) {
+      messages = messages.slice(-10);
+    }
+
+    return chatCompletion;
+  } catch (error) {
+    console.error("Groq API Error:", error);
+    throw error;
   }
 }
 
@@ -457,30 +504,111 @@ async function loadSelectedLanguage(skipSetDefaultSourceCodeName = false) {
   }
 }
 
+// Updated callAICodeAssistant using regex to capture entire code block and clear it from the response.
+// Also detects a language change request marked by @@@language@@@ and updates both the editor and compiler.
 async function callAICodeAssistant(query) {
-    // For demonstration, simulate an API call with a delay.
-    return new Promise((resolve, reject) => {
-      // Here you can add any logic you want.
-      // For example, using fetch to call a real API:
-      //
-      // fetch('https://api.example.com/ai-assistant', {
-      //   method: 'POST',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify({ query: query })
-      // })
-      // .then(response => response.json())
-      // .then(data => resolve(data.answer))
-      // .catch(err => reject(err));
-      //
-      // For now, we'll simulate a response:
-      setTimeout(() => {
-        const simulatedResponse = `Simulated response to: "${query}"`;
-        resolve(simulatedResponse);
-      }, 1000); // Delay of 1 second
-    });
-  }
-  
+  try {
+    // Get the current code from the source editor.
+    const codeContext = sourceEditor.getValue();
 
+    // Build a prompt that includes both the code context and the user's instruction.
+    const fullPrompt =
+      `I'm working on the following code:\n\n${codeContext}\n\n` +
+      `Please make the following changes:\n${query}`;
+
+    // Add the user message to history.
+    messages.push({
+      role: "user",
+      content: fullPrompt,
+    });
+
+    // Get the completion from Groq.
+    const chatCompletion = await getGroqChatCompletion(query);
+
+    if (
+      chatCompletion &&
+      chatCompletion.choices &&
+      chatCompletion.choices.length > 0 &&
+      chatCompletion.choices[0].message &&
+      chatCompletion.choices[0].message.content
+    ) {
+      let aiResponse = chatCompletion.choices[0].message.content;
+      messages.push({
+        role: "assistant",
+        content: aiResponse,
+      });
+
+      // Keep only the last 10 messages.
+      if (messages.length > 10) {
+        messages = messages.slice(-10);
+      }
+
+      // Check for a code block enclosed in triple backticks.
+      const codeBlockRegex = /```(?:\w*\n)?([\s\S]*?)```/;
+      const codeMatch = aiResponse.match(codeBlockRegex);
+      if (codeMatch && codeMatch[1].trim().length > 0) {
+        // Extract the updated code.
+        const newCode = codeMatch[1].trim();
+        console.log("Extracted new code:", newCode);
+
+        // Update the source editor with the new code.
+        sourceEditor.setValue(newCode);
+
+        // Remove the code block from the response so the user doesn't see it.
+        aiResponse = aiResponse.replace(codeBlockRegex, "").trim();
+      }
+
+      // Detect a language change marker marked by @@@language@@@.
+      const languageMarkerRegex = /@@@([\w\s\+\#]+)@@@/;
+      const languageMatch = aiResponse.match(languageMarkerRegex);
+      if (languageMatch && languageMatch[1].trim().length > 0) {
+        const requestedLanguage = languageMatch[1].trim();
+        console.log("Language change requested:", requestedLanguage);
+
+        // Use the helper function to get the expected editor mode.
+        const newEditorMode = getEditorLanguageMode(requestedLanguage);
+        console.log("New editor mode determined:", newEditorMode);
+
+        // Update the Monaco editor language.
+        monaco.editor.setModelLanguage(sourceEditor.getModel(), newEditorMode);
+
+        // Update the language dropdown based on the "langauge_mode" attribute.
+        let foundValue = null;
+        $selectLanguage.find("option").each(function () {
+          const optionMode = $(this).attr("langauge_mode");
+          if (
+            optionMode &&
+            optionMode.toLowerCase() === newEditorMode.toLowerCase()
+          ) {
+            foundValue = $(this).val();
+          }
+        });
+        if (foundValue) {
+          $selectLanguage.val(foundValue);
+          // Refresh the UI if using Semantic UI dropdown.
+          if ($selectLanguage.dropdown) {
+            $selectLanguage.dropdown("set selected", foundValue);
+          }
+        } else {
+          console.warn(
+            "No matching language option found for mode:",
+            newEditorMode
+          );
+        }
+        // Remove the language marker from the response.
+        aiResponse = aiResponse.replace(languageMarkerRegex, "").trim();
+      }
+
+      // Return the cleaned-up response.
+      return aiResponse;
+    } else {
+      return "No valid response received from the Groq API.";
+    }
+  } catch (error) {
+    console.error("Error fetching Groq chat completion:", error);
+    return `Error: ${error.message || "Unknown error"}`;
+  }
+}
 
 function selectLanguageByFlavorAndId(languageId, flavor) {
   let option = $selectLanguage.find(`[value=${languageId}][flavor=${flavor}]`);
@@ -508,7 +636,6 @@ async function getLanguage(flavor, languageId) {
         if (!languages[flavor]) {
           languages[flavor] = {};
         }
-
         languages[flavor][languageId] = data;
         resolve(data);
       },
@@ -537,6 +664,67 @@ function clear() {
 
   $statusLine.html("");
 }
+
+
+// A dedicated auto-complete function for a single line.
+// This function does not track conversation history.
+async function autoCompleteLine(incompleteLine) {
+    // Hardcoded system prompt for auto-completion.
+    const systemPrompt =
+      "You are a code auto-completion assistant. Your task is to complete the given incomplete line of code. " +
+      "Respond ONLY with the complete code enclosed within triple backticks (```), and nothing else.";
+  
+    // Build the user prompt.
+    const userPrompt = `Complete the following line of code:\n${incompleteLine}`;
+  
+    // Create a temporary messages array containing only the system and user messages.
+    const messagesForCompletion = [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt }
+    ];
+  
+    try {
+      // Get the Groq client instance.
+      const groq = getGroqClient();
+  
+      // Request a completion from the model.
+      const chatCompletion = await groq.chat.completions.create({
+        messages: messagesForCompletion,
+        model: "llama-3.3-70b-versatile",
+        temperature: 0.7,
+        max_tokens: 400, // Adjust as needed for the expected completion length.
+      });
+  
+      // Extract the response content.
+      if (
+        chatCompletion &&
+        chatCompletion.choices &&
+        chatCompletion.choices.length > 0 &&
+        chatCompletion.choices[0].message &&
+        chatCompletion.choices[0].message.content
+      ) {
+        let response = chatCompletion.choices[0].message.content;
+  
+        // Use regex to extract the code enclosed within triple backticks.
+        const codeBlockRegex = /```([\s\S]*?)```/;
+        const match = response.match(codeBlockRegex);
+  
+        if (match && match[1].trim().length > 0) {
+          // Return only the code inside the backticks.
+          return match[1].trim();
+        } else {
+          // If the response does not contain a code block, return an empty string.
+          return "";
+        }
+      } else {
+        return "";
+      }
+    } catch (error) {
+      console.error("Auto-complete error:", error);
+      return "";
+    }
+  }
+  
 
 function refreshSiteContentHeight() {
   const navigationHeight = document.getElementById(
@@ -649,6 +837,75 @@ document.addEventListener("DOMContentLoaded", async function () {
         },
       });
 
+        let completionTimer = null;
+        let lastLineNumber = null;
+
+        sourceEditor.onDidChangeCursorPosition((e) => {
+            const position = sourceEditor.getPosition();
+            const currentLineNumber = position.lineNumber;
+            const lineContent = sourceEditor.getModel().getLineContent(currentLineNumber);
+            console.log("Current line content:", lineContent);
+
+            // If we're on a new line, clear any existing timer
+            if (lastLineNumber !== currentLineNumber) {
+                if (completionTimer) {
+                clearTimeout(completionTimer);
+                completionTimer = null;
+                }
+                lastLineNumber = currentLineNumber;
+            }
+
+            // Reset the timer every time a change is detected on the same line.
+            if (completionTimer) {
+                clearTimeout(completionTimer);
+            }
+            
+            // Start a new timer (2 seconds)
+            completionTimer = setTimeout(async () => {
+                // Check if the line appears incomplete.
+                // This heuristic might be as simple as checking if the line does not end with a semicolon
+                // or if it matches a pattern that suggests it's incomplete.
+                // Adjust this logic to suit your language and needs.
+                if (!isLineComplete(lineContent)) {
+                console.log(`Line ${currentLineNumber} appears incomplete. Triggering auto-complete.`);
+                const completion = await autoCompleteLine(lineContent);
+                if (completion) {
+                    // Optionally, you might display the completion as inline ghost text
+                    // or insert it into the document.
+                    console.log("Auto-completion suggestion:", completion);
+                    // For example, you could automatically insert the completion:
+                    // sourceEditor.executeEdits("", [{ range: new monaco.Range(currentLineNumber, lineContent.length + 1, currentLineNumber, lineContent.length + 1), text: completion }]);
+                }
+                }
+            }, 2000); // 2000 milliseconds = 2 seconds
+        });
+
+        // A helper function to decide whether a line is complete.
+        // You can customize this logic based on your requirements.
+        function isLineComplete(line) {
+        // For example, assume a line is complete if it ends with a semicolon or a closing brace.
+        const trimmed = line.trim();
+        return trimmed.endsWith(";") || trimmed.endsWith("}") || trimmed === "";
+        }
+
+        // A function that builds a prompt and calls your auto-completion API.
+        // Here we simulate an auto-complete call using your model.
+        async function triggerAutoComplete(lineContent) {
+        // Build a prompt that tells the model to complete this line.
+        // You can add context from surrounding lines if needed.
+        const prompt = `Complete the following line of code:\n${lineContent}`;
+        try {
+            // Here we assume you have a function similar to callAICodeAssistant,
+            // but for auto-completion. You might reuse callAICodeAssistant if it fits.
+            const completionResponse = await callAICodeAssistant(prompt);
+            // Process the response as needed. For example, extract the suggestion.
+            return completionResponse;
+        } catch (error) {
+            console.error("Auto-complete error:", error);
+            return null;
+        }
+        }
+
       sourceEditor.addCommand(
         monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter,
         run
@@ -670,31 +927,59 @@ document.addEventListener("DOMContentLoaded", async function () {
 
     layout.registerComponent("aiAssistant", function (container, state) {
       const aiContainer = document.createElement("div");
-      // Use the CSS classes defined in styles.css
       aiContainer.className = "ai-assistant-container";
       aiContainer.innerHTML = `
-        <div class="ai-assistant-container">
-        <div id="ai-output" class="ai-assistant-output">
-            <!-- AI suggestions or messages will appear here -->
-        </div>
-        <div class="ai-assistant-input-container">
-            <textarea id="ai-input" class="ai-assistant-input" placeholder="Ask something..."></textarea>
-            <button id="ai-send-btn" class="ai-assistant-btn">Send</button>
-        </div>
-        </div>
+          <div class="ai-assistant-container">
+            <div id="ai-output" class="ai-assistant-output"></div>
+            <div class="ai-assistant-input-container">
+              <textarea id="ai-input" class="ai-assistant-input" placeholder="Ask something..."></textarea>
+              <button id="ai-send-btn" class="ai-assistant-btn">Send</button>
+            </div>
+          </div>
         `;
+
       container.getElement()[0].appendChild(aiContainer);
 
-      aiContainer
-        .querySelector("#ai-send-btn")
-        .addEventListener("click", function () {
-          const query = aiContainer.querySelector("#ai-input").value;
-          callAICodeAssistant(query).then((response) => {
-            aiContainer.querySelector(
-              "#ai-output"
-            ).innerHTML += `<p>${response}</p>`;
-          });
-        });
+      const aiInput = aiContainer.querySelector("#ai-input");
+      const aiOutput = aiContainer.querySelector("#ai-output");
+      const aiButton = aiContainer.querySelector("#ai-send-btn");
+
+      // Add loading state
+      let isLoading = false;
+
+      aiButton.addEventListener("click", async function () {
+        if (isLoading) return;
+
+        const query = aiInput.value.trim();
+        if (!query) return;
+
+        try {
+          isLoading = true;
+          aiButton.disabled = true;
+          aiInput.disabled = true;
+
+          // Add user message to UI
+          aiOutput.innerHTML += `<div class="user-query">You: ${query}</div>`;
+
+          // Get and display AI response
+          const response = await callAICodeAssistant(query);
+          if (!response || !response.trim()) {
+            aiOutput.innerHTML += `<div class="ai-response">AI: Ok, I have made the appropriate changes.</div>`;
+          } else {
+            aiOutput.innerHTML += `<div class="ai-response">AI: ${response}</div>`;
+          }
+          // Clear input and scroll to bottom
+          aiInput.value = "";
+          aiOutput.scrollTop = aiOutput.scrollHeight;
+        } catch (error) {
+          console.error("AI Error:", error);
+          aiOutput.innerHTML += `<div class="error">Error: ${error.message}</div>`;
+        } finally {
+          isLoading = false;
+          aiButton.disabled = false;
+          aiInput.disabled = false;
+        }
+      });
     });
 
     layout.registerComponent("stdout", function (container, state) {
@@ -714,6 +999,31 @@ document.addEventListener("DOMContentLoaded", async function () {
       setDefaults();
       refreshLayoutSize();
       window.top.postMessage({ event: "initialised" }, "*");
+
+      // Now that the source editor is initialized, update the system message.
+      // Prepend the system message to the messages array.
+      messages.unshift({
+        role: "system",
+        content:
+          "You are an expert coding assistant skilled in both analyzing and improving code. Provide detailed explanations and help users with all programming questions. When asked to modify code, always return the complete updated code enclosed within triple backticks (```), and do not include triple backticks elsewhere in your response. " +
+          "If you decide that the code should be changed to a different programming language, prepend your response with a language change marker formatted exactly as follows: @@@<language_key>@@@. Use one of the following keys for the corresponding languages:\n\n" +
+          "  - C: c\n" +
+          "  - C++: cpp\n" +
+          "  - C#: csharp\n" +
+          "  - Java: java\n" +
+          "  - JavaScript: javascript\n" +
+          "  - Python: python\n" +
+          "  - PHP: php\n" +
+          "  - Ruby: ruby\n" +
+          "  - Go: go\n" +
+          "  - Lua: lua\n" +
+          "  - Swift: swift\n" +
+          "  - TypeScript: typescript\n" +
+          "  - Pascal: pascal\n" +
+          "\n" +
+          "Only include the marker when a language change is desired. Do not use triple backticks for any text other than complete code blocks. The current source code is provided as context:\n\n" +
+          sourceEditor.getValue(),
+      });
     });
 
     layout.init();
