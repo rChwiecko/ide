@@ -665,66 +665,64 @@ function clear() {
   $statusLine.html("");
 }
 
-
 // A dedicated auto-complete function for a single line.
 // This function does not track conversation history.
 async function autoCompleteLine(incompleteLine) {
-    // Hardcoded system prompt for auto-completion.
-    const systemPrompt =
-      "You are a code auto-completion assistant. Your task is to complete the given incomplete line of code. " +
-      "Respond ONLY with the complete code enclosed within triple backticks (```), and nothing else.";
-  
-    // Build the user prompt.
-    const userPrompt = `Complete the following line of code:\n${incompleteLine}`;
-  
-    // Create a temporary messages array containing only the system and user messages.
-    const messagesForCompletion = [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userPrompt }
-    ];
-  
-    try {
-      // Get the Groq client instance.
-      const groq = getGroqClient();
-  
-      // Request a completion from the model.
-      const chatCompletion = await groq.chat.completions.create({
-        messages: messagesForCompletion,
-        model: "llama-3.3-70b-versatile",
-        temperature: 0.7,
-        max_tokens: 400, // Adjust as needed for the expected completion length.
-      });
-  
-      // Extract the response content.
-      if (
-        chatCompletion &&
-        chatCompletion.choices &&
-        chatCompletion.choices.length > 0 &&
-        chatCompletion.choices[0].message &&
-        chatCompletion.choices[0].message.content
-      ) {
-        let response = chatCompletion.choices[0].message.content;
-  
-        // Use regex to extract the code enclosed within triple backticks.
-        const codeBlockRegex = /```([\s\S]*?)```/;
-        const match = response.match(codeBlockRegex);
-  
-        if (match && match[1].trim().length > 0) {
-          // Return only the code inside the backticks.
-          return match[1].trim();
-        } else {
-          // If the response does not contain a code block, return an empty string.
-          return "";
-        }
+  // Hardcoded system prompt for auto-completion.
+  const systemPrompt =
+    "You are a code auto-completion assistant. Your task is to complete the given incomplete line of code. " +
+    "Respond ONLY with the complete code enclosed within triple backticks (```), and nothing else.";
+
+  // Build the user prompt.
+  const userPrompt = `Complete the following line of code:\n${incompleteLine}`;
+
+  // Create a temporary messages array containing only the system and user messages.
+  const messagesForCompletion = [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: userPrompt },
+  ];
+
+  try {
+    // Get the Groq client instance.
+    const groq = getGroqClient();
+
+    // Request a completion from the model.
+    const chatCompletion = await groq.chat.completions.create({
+      messages: messagesForCompletion,
+      model: "llama-3.3-70b-versatile",
+      temperature: 0.7,
+      max_tokens: 400, // Adjust as needed for the expected completion length.
+    });
+
+    // Extract the response content.
+    if (
+      chatCompletion &&
+      chatCompletion.choices &&
+      chatCompletion.choices.length > 0 &&
+      chatCompletion.choices[0].message &&
+      chatCompletion.choices[0].message.content
+    ) {
+      let response = chatCompletion.choices[0].message.content;
+
+      // Use regex to extract the code enclosed within triple backticks.
+      const codeBlockRegex = /```([\s\S]*?)```/;
+      const match = response.match(codeBlockRegex);
+
+      if (match && match[1].trim().length > 0) {
+        // Return only the code inside the backticks.
+        return match[1].trim();
       } else {
+        // If the response does not contain a code block, return an empty string.
         return "";
       }
-    } catch (error) {
-      console.error("Auto-complete error:", error);
+    } else {
       return "";
     }
+  } catch (error) {
+    console.error("Auto-complete error:", error);
+    return "";
   }
-  
+}
 
 function refreshSiteContentHeight() {
   const navigationHeight = document.getElementById(
@@ -837,74 +835,78 @@ document.addEventListener("DOMContentLoaded", async function () {
         },
       });
 
-        let completionTimer = null;
-        let lastLineNumber = null;
+      let completionTimer = null;
+      let lastLineNumber = null;
 
-        sourceEditor.onDidChangeCursorPosition((e) => {
-            const position = sourceEditor.getPosition();
-            const currentLineNumber = position.lineNumber;
-            const lineContent = sourceEditor.getModel().getLineContent(currentLineNumber);
-            console.log("Current line content:", lineContent);
+      sourceEditor.onDidChangeCursorPosition((e) => {
+        const position = sourceEditor.getPosition();
+        const currentLineNumber = position.lineNumber;
+        const lineContent = sourceEditor
+          .getModel()
+          .getLineContent(currentLineNumber);
+        console.log("Current line content:", lineContent);
 
-            // If we're on a new line, clear any existing timer
-            if (lastLineNumber !== currentLineNumber) {
-                if (completionTimer) {
-                clearTimeout(completionTimer);
-                completionTimer = null;
-                }
-                lastLineNumber = currentLineNumber;
+        // If we're on a new line, clear any existing timer
+        if (lastLineNumber !== currentLineNumber) {
+          if (completionTimer) {
+            clearTimeout(completionTimer);
+            completionTimer = null;
+          }
+          lastLineNumber = currentLineNumber;
+        }
+
+        // Reset the timer every time a change is detected on the same line.
+        if (completionTimer) {
+          clearTimeout(completionTimer);
+        }
+
+        // Start a new timer (2 seconds)
+        completionTimer = setTimeout(async () => {
+          // Check if the line appears incomplete.
+          // This heuristic might be as simple as checking if the line does not end with a semicolon
+          // or if it matches a pattern that suggests it's incomplete.
+          // Adjust this logic to suit your language and needs.
+          if (!isLineComplete(lineContent)) {
+            console.log(
+              `Line ${currentLineNumber} appears incomplete. Triggering auto-complete.`
+            );
+            const completion = await autoCompleteLine(lineContent);
+            if (completion) {
+              // Optionally, you might display the completion as inline ghost text
+              // or insert it into the document.
+              console.log("Auto-completion suggestion:", completion);
+              // For example, you could automatically insert the completion:
+              // sourceEditor.executeEdits("", [{ range: new monaco.Range(currentLineNumber, lineContent.length + 1, currentLineNumber, lineContent.length + 1), text: completion }]);
             }
+          }
+        }, 2000); // 2000 milliseconds = 2 seconds
+      });
 
-            // Reset the timer every time a change is detected on the same line.
-            if (completionTimer) {
-                clearTimeout(completionTimer);
-            }
-            
-            // Start a new timer (2 seconds)
-            completionTimer = setTimeout(async () => {
-                // Check if the line appears incomplete.
-                // This heuristic might be as simple as checking if the line does not end with a semicolon
-                // or if it matches a pattern that suggests it's incomplete.
-                // Adjust this logic to suit your language and needs.
-                if (!isLineComplete(lineContent)) {
-                console.log(`Line ${currentLineNumber} appears incomplete. Triggering auto-complete.`);
-                const completion = await autoCompleteLine(lineContent);
-                if (completion) {
-                    // Optionally, you might display the completion as inline ghost text
-                    // or insert it into the document.
-                    console.log("Auto-completion suggestion:", completion);
-                    // For example, you could automatically insert the completion:
-                    // sourceEditor.executeEdits("", [{ range: new monaco.Range(currentLineNumber, lineContent.length + 1, currentLineNumber, lineContent.length + 1), text: completion }]);
-                }
-                }
-            }, 2000); // 2000 milliseconds = 2 seconds
-        });
-
-        // A helper function to decide whether a line is complete.
-        // You can customize this logic based on your requirements.
-        function isLineComplete(line) {
+      // A helper function to decide whether a line is complete.
+      // You can customize this logic based on your requirements.
+      function isLineComplete(line) {
         // For example, assume a line is complete if it ends with a semicolon or a closing brace.
         const trimmed = line.trim();
         return trimmed.endsWith(";") || trimmed.endsWith("}") || trimmed === "";
-        }
+      }
 
-        // A function that builds a prompt and calls your auto-completion API.
-        // Here we simulate an auto-complete call using your model.
-        async function triggerAutoComplete(lineContent) {
+      // A function that builds a prompt and calls your auto-completion API.
+      // Here we simulate an auto-complete call using your model.
+      async function triggerAutoComplete(lineContent) {
         // Build a prompt that tells the model to complete this line.
         // You can add context from surrounding lines if needed.
         const prompt = `Complete the following line of code:\n${lineContent}`;
         try {
-            // Here we assume you have a function similar to callAICodeAssistant,
-            // but for auto-completion. You might reuse callAICodeAssistant if it fits.
-            const completionResponse = await callAICodeAssistant(prompt);
-            // Process the response as needed. For example, extract the suggestion.
-            return completionResponse;
+          // Here we assume you have a function similar to callAICodeAssistant,
+          // but for auto-completion. You might reuse callAICodeAssistant if it fits.
+          const completionResponse = await callAICodeAssistant(prompt);
+          // Process the response as needed. For example, extract the suggestion.
+          return completionResponse;
         } catch (error) {
-            console.error("Auto-complete error:", error);
-            return null;
+          console.error("Auto-complete error:", error);
+          return null;
         }
-        }
+      }
 
       sourceEditor.addCommand(
         monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter,
@@ -1021,7 +1023,7 @@ document.addEventListener("DOMContentLoaded", async function () {
           "  - TypeScript: typescript\n" +
           "  - Pascal: pascal\n" +
           "\n" +
-          "Only include the marker when a language change is desired. Do not use triple backticks for any text other than complete code blocks. The current source code is provided as context:\n\n" +
+          "Only include the marker when a language change is desired. Do not use triple backticks for any text other than complete code blocks. The current source code is provided as context:\n\nDO NOT MAKE CHANGES TO THE CODE UNLESS ASKED TO" +
           sourceEditor.getValue(),
       });
     });
